@@ -302,7 +302,7 @@ class Node( object ):
         debug( 'sendInt: writing chr(%d)\n' % ord( intr ) )
         self.write( intr )
 
-    def monitor( self, timeoutms=None, findPid=True ):
+    def monitor( self, timeoutms=1000, findPid=True ):
         """Monitor and return the output of a command.
            Set self.waiting to False if command has completed.
            timeoutms: timeout in ms or None to wait indefinitely
@@ -862,6 +862,40 @@ class Docker ( Host ):
         return Host.popen( self, *args, mncmd=mncmd, **kwargs )
 
     def cmd(self, *args, **kwargs ):
+        """We cannot use the default Mininet cmd(), it seems to be not thread-safe.
+        The poll function in self.waitOutput can block when executing commands in Docker host.
+        Therefore propose to use the docker-py supported function for executing commands in Docker containers,
+        to avoid waitOutput
+        The Mininet mechanism to monitor stdout with a sentinel seems not very Docker compatible and
+        should be revised... """
+        verbose = kwargs.get('verbose', False)
+        # Allow sendCmd( [ list ] )
+        cmd = ''
+        if len(args) == 1 and isinstance(args[0], list):
+            cmd = args[0]
+        # Allow sendCmd( cmd, arg1, arg2... )
+        elif len(args) > 0:
+            cmd = args
+        # Convert to string
+        if not isinstance(cmd, str):
+            cmd = ' '.join([str(c) for c in cmd])
+
+        # check if container is still running
+        container_list = self.dcli.containers(filters={"id": self.did, "status": "running"})
+        if len(container_list) == 0:
+            debug("container {0} not found, cannot execute command: {1}".format(self.name, cmd))
+            self.waiting = False
+            return ''
+
+        exec_dict = self.dcli.exec_create(self.dc, cmd, privileged=True)
+        out = self.dcli.exec_start(exec_dict)
+        log = info if verbose else debug
+        log('*** %s : %s\n' % (self.name, args))
+        #info("cmd: {0} \noutput:{1}".format(cmd, out))
+        self.waiting = False
+        return out
+
+        '''
         """Send a command, wait for output, and return it.
            cmd: string"""
         verbose = kwargs.get( 'verbose', False )
@@ -869,6 +903,7 @@ class Docker ( Host ):
         log( '*** %s : %s\n' % ( self.name, args ) )
         self.sendCmd( *args, **kwargs )
         return self.waitOutput( verbose )
+        '''
 
     def _get_pid(self):
         state = self.dcinfo.get("State", None)
